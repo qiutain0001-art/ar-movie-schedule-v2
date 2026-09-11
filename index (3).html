@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>圖書館電影播映節目表 - WebAR</title>
+<style>
+  body { margin: 0; font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+
+  /* 官方建議結構：容器用 100vw/100vh，避免巢狀 % 高度造成相機畫面被吃掉 */
+  #container {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+    background: #000;
+  }
+
+  /* 強制讓 MindAR 內部產生的相機畫面（video / canvas）鋪滿螢幕並置於最底層，
+     避免版面疊層問題導致看不到即時相機影像 */
+  #container video,
+  #container canvas {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+  #container video { z-index: 1 !important; }
+  #container canvas { z-index: 2 !important; background: transparent !important; }
+
+  #startScreen {
+    position: fixed; inset: 0; z-index: 50;
+    background: linear-gradient(160deg,#0b0b0f,#1a1a22);
+    color: #fff; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    padding: 24px; gap: 18px;
+  }
+  #startScreen h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
+  #startScreen p { font-size: 14px; opacity: .75; margin: 0; max-width: 320px; line-height: 1.6; }
+  #startBtn {
+    margin-top: 8px; padding: 14px 36px; font-size: 16px; font-weight: 600;
+    border-radius: 999px; border: none; color: #111;
+    background: #ffd53d;
+  }
+  #startBtn:active { transform: scale(0.97); }
+
+  #scanHint {
+    position: fixed; top: 18px; left: 0; right: 0; z-index: 40;
+    text-align: center; color: #fff; font-size: 14px;
+    text-shadow: 0 1px 4px rgba(0,0,0,.8);
+    pointer-events: none; display: none;
+  }
+  #scanHint .badge {
+    display: inline-block; background: rgba(0,0,0,.55);
+    padding: 8px 16px; border-radius: 999px;
+  }
+
+  #panelToggle {
+    position: fixed; top: 14px; right: 14px; z-index: 60;
+    width: 40px; height: 40px; border-radius: 999px; border: none;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 18px;
+    display: none; align-items: center; justify-content: center;
+  }
+
+  #adjustPanel {
+    position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 55;
+    background: rgba(20,20,24,.88); color: #fff; border-radius: 14px;
+    padding: 14px 16px 10px; font-size: 13px; display: none;
+  }
+  #adjustPanel h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+  .adjRow { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .adjRow label { width: 64px; flex-shrink: 0; opacity: .85; }
+  .adjRow input[type="range"] { flex: 1; }
+  .adjRow span { width: 46px; text-align: right; font-variant-numeric: tabular-nums; opacity: .8; }
+  #resetBtn {
+    width: 100%; padding: 8px; margin-top: 4px; border: none; border-radius: 8px;
+    background: #444; color: #fff; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="container"></div>
+
+<div id="startScreen">
+  <h1>📽️ 電影播映節目表 AR</h1>
+  <p>請將鏡頭對準視聽區的宣傳海報，即可看到本月播映片單動態浮現。<br/>需要相機權限才能開始。</p>
+  <button id="startBtn">開始掃描</button>
+</div>
+
+<div id="scanHint"><span class="badge">🔍 請對準海報 / 目標圖像</span></div>
+
+<button id="panelToggle">⚙️</button>
+<div id="adjustPanel">
+  <h3>位置 / 大小校正</h3>
+  <div class="adjRow">
+    <label>左右 X</label>
+    <input type="range" id="adjX" min="-2" max="2" step="0.01" value="0" />
+    <span id="valX">0.00</span>
+  </div>
+  <div class="adjRow">
+    <label>上下 Y</label>
+    <input type="range" id="adjY" min="-1" max="3" step="0.01" value="0.65" />
+    <span id="valY">0.65</span>
+  </div>
+  <div class="adjRow">
+    <label>深淺 Z</label>
+    <input type="range" id="adjZ" min="-2" max="2" step="0.01" value="0" />
+    <span id="valZ">0.00</span>
+  </div>
+  <div class="adjRow">
+    <label>大小</label>
+    <input type="range" id="adjScale" min="0.2" max="3" step="0.01" value="1" />
+    <span id="valScale">1.00</span>
+  </div>
+  <button id="resetBtn">重設為預設值</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { MindARThree } from "mindar-image-three";
+
+/* 綠幕去背 Shader */
+const chromaKeyVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const chromaKeyFragmentShader = `
+  precision highp float;
+  uniform sampler2D map;
+  uniform vec3 keyColor;
+  uniform float similarity;
+  uniform float smoothness;
+  uniform float spill;
+  varying vec2 vUv;
+  vec2 RGBtoUV(vec3 rgb) {
+    return vec2(
+      rgb.r * -0.169 - rgb.g * 0.331 + rgb.b * 0.5   + 0.5,
+      rgb.r *  0.5   - rgb.g * 0.419 - rgb.b * 0.081 + 0.5
+    );
+  }
+  void main() {
+    vec4 tex = texture2D(map, vUv);
+    vec2 chromaUV = RGBtoUV(tex.rgb);
+    vec2 keyUV    = RGBtoUV(keyColor);
+    float d = distance(chromaUV, keyUV);
+    float alpha = smoothstep(similarity, similarity + smoothness, d);
+    float maxrb = max(tex.r, tex.b);
+    vec3 color = tex.rgb;
+    color.g = min(color.g, mix(color.g, maxrb, spill));
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+function createChromaKeyMaterial(videoTexture) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      map: { value: videoTexture },
+      keyColor: { value: new THREE.Color(0x00ff00) },
+      similarity: { value: 0.28 },
+      smoothness: { value: 0.10 },
+      spill: { value: 0.6 },
+    },
+    vertexShader: chromaKeyVertexShader,
+    fragmentShader: chromaKeyFragmentShader,
+    transparent: true,
+    side: THREE.DoubleSide,
+  });
+}
+
+const startScreen = document.getElementById("startScreen");
+const startBtn = document.getElementById("startBtn");
+const scanHint = document.getElementById("scanHint");
+const panelToggle = document.getElementById("panelToggle");
+const adjustPanel = document.getElementById("adjustPanel");
+const adjX = document.getElementById("adjX");
+const adjY = document.getElementById("adjY");
+const adjZ = document.getElementById("adjZ");
+const adjScale = document.getElementById("adjScale");
+const valX = document.getElementById("valX");
+const valY = document.getElementById("valY");
+const valZ = document.getElementById("valZ");
+const valScale = document.getElementById("valScale");
+const resetBtn = document.getElementById("resetBtn");
+
+const DEFAULTS = { x: 0, y: 0.65, z: 0, scale: 1 };
+let mindarThree, video, renderer, scene, camera, anchor, plane;
+let started = false;
+
+panelToggle.addEventListener("click", () => {
+  adjustPanel.style.display = adjustPanel.style.display === "block" ? "none" : "block";
+});
+function applyTransform() {
+  if (!plane) return;
+  plane.position.set(parseFloat(adjX.value), parseFloat(adjY.value), parseFloat(adjZ.value));
+  plane.scale.setScalar(parseFloat(adjScale.value));
+  valX.textContent = parseFloat(adjX.value).toFixed(2);
+  valY.textContent = parseFloat(adjY.value).toFixed(2);
+  valZ.textContent = parseFloat(adjZ.value).toFixed(2);
+  valScale.textContent = parseFloat(adjScale.value).toFixed(2);
+}
+[adjX, adjY, adjZ, adjScale].forEach((el) => el.addEventListener("input", applyTransform));
+resetBtn.addEventListener("click", () => {
+  adjX.value = DEFAULTS.x; adjY.value = DEFAULTS.y; adjZ.value = DEFAULTS.z; adjScale.value = DEFAULTS.scale;
+  applyTransform();
+});
+
+async function initAR() {
+  mindarThree = new MindARThree({
+    container: document.querySelector("#container"),
+    imageTargetSrc: "./audio_target.mind",
+  });
+
+  ({ renderer, scene, camera } = mindarThree);
+  renderer.setClearColor(0x000000, 0); // 確保 canvas 背景透明，讓相機畫面能透出來
+
+  anchor = mindarThree.addAnchor(0);
+
+  video = document.createElement("video");
+  video.src = "./cinema-rolling-carousel.mp4";
+  video.crossOrigin = "anonymous";
+  video.loop = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute("webkit-playsinline", "true");
+
+  const videoTexture = new THREE.VideoTexture(video);
+  videoTexture.minFilter = THREE.LinearFilter;
+  videoTexture.magFilter = THREE.LinearFilter;
+  videoTexture.format = THREE.RGBAFormat;
+
+  const material = createChromaKeyMaterial(videoTexture);
+  const aspect = 1080 / 1920;
+  const planeHeight = 1.4;
+  const geometry = new THREE.PlaneGeometry(planeHeight * aspect, planeHeight);
+  plane = new THREE.Mesh(geometry, material);
+  anchor.group.add(plane);
+  applyTransform();
+
+  anchor.onTargetFound = () => {
+    scanHint.style.display = "none";
+    video.currentTime = 0;
+    video.play().catch(() => {});
+  };
+  anchor.onTargetLost = () => {
+    scanHint.style.display = "block";
+    video.pause();
+  };
+
+  await mindarThree.start();
+  scanHint.style.display = "block";
+  panelToggle.style.display = "flex";
+
+  renderer.setAnimationLoop(() => {
+    if (video.readyState >= video.HAVE_CURRENT_DATA) {
+      videoTexture.needsUpdate = true;
+    }
+    renderer.render(scene, camera);
+  });
+}
+
+startBtn.addEventListener("click", async () => {
+  if (started) return;
+  started = true;
+  startScreen.style.display = "none";
+  try {
+    await initAR();
+  } catch (err) {
+    console.error(err);
+    alert("啟動相機失敗：" + err.message);
+    startScreen.style.display = "flex";
+    started = false;
+  }
+});
+</script>
+</body>
+</html>
