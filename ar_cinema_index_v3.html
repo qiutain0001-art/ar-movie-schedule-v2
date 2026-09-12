@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>視聽室 AR 電影預告牆</title>
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+<script>
+  // Removes the plain-white background of the promo videos in real time,
+  // so only the DVD case artwork + printed captions stay visible and the
+  // live camera feed shows through everywhere else (a "white-screen"
+  // chroma key, since the source photos were shot on a white backdrop).
+  AFRAME.registerComponent('chromakey-video', {
+    schema: {
+      video: { type: 'selector' },
+      width: { default: 1 },
+      height: { default: 1.413 },
+      threshold: { default: 0.90 },
+      feather: { default: 0.05 }
+    },
+    init: function () {
+      const THREE = AFRAME.THREE;
+      const texture = new THREE.VideoTexture(this.data.video);
+      texture.colorSpace = THREE.SRGBColorSpace;
+
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          map: { value: texture },
+          threshold: { value: this.data.threshold },
+          feather: { value: this.data.feather }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D map;
+          uniform float threshold;
+          uniform float feather;
+          varying vec2 vUv;
+          void main() {
+            vec4 texColor = texture2D(map, vUv);
+            float minC = min(min(texColor.r, texColor.g), texColor.b);
+            float alpha = 1.0 - smoothstep(threshold - feather, threshold, minC);
+            if (alpha < 0.02) discard;
+            gl_FragColor = vec4(texColor.rgb, alpha);
+          }
+        `,
+        transparent: true,
+        side: THREE.DoubleSide
+      });
+
+      const geometry = new THREE.PlaneGeometry(this.data.width, this.data.height);
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.el.setObject3D('mesh', this.mesh);
+    },
+    remove: function () {
+      this.el.removeObject3D('mesh');
+    }
+  });
+</script>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif; background:#000; }
+  a-scene { position:absolute; top:0; left:0; width:100%; height:100%; }
+
+  /* ---------- Landing / carousel overlay ---------- */
+  #landing {
+    position:fixed; inset:0; z-index:20;
+    background:linear-gradient(180deg,#0b1220 0%,#111827 100%);
+    color:#fff; display:flex; flex-direction:column; align-items:center;
+    justify-content:space-between; padding:32px 20px 28px; box-sizing:border-box;
+    transition:opacity .4s ease, visibility .4s ease;
+  }
+  #landing.hidden { opacity:0; visibility:hidden; pointer-events:none; }
+
+  .landing-head { text-align:center; }
+  .landing-head h1 { font-size:22px; margin:0 0 6px; letter-spacing:1px; }
+  .landing-head p { font-size:13px; color:#9ca3af; margin:0; }
+
+  .carousel { position:relative; width:min(78vw,320px); aspect-ratio:360/509; border-radius:18px; overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  .carousel .slide {
+    position:absolute; inset:0; opacity:0; transform:scale(1.03);
+    transition:opacity .6s ease, transform .6s ease;
+  }
+  .carousel .slide.active { opacity:1; transform:scale(1); }
+  .carousel .slide img { width:100%; height:100%; object-fit:cover; display:block; }
+  .carousel .caption {
+    position:absolute; left:0; right:0; bottom:0; padding:14px 16px 12px;
+    background:linear-gradient(0deg,rgba(0,0,0,.85) 20%,rgba(0,0,0,0) 100%);
+  }
+  .carousel .caption .title { font-size:17px; font-weight:700; margin:0 0 2px; }
+  .carousel .caption .date { font-size:13px; color:#ffd447; margin:0; }
+
+  .dots { display:flex; gap:8px; margin-top:14px; }
+  .dots span { width:7px; height:7px; border-radius:50%; background:#4b5563; transition:background .3s; }
+  .dots span.active { background:#ffd447; }
+
+  .instructions { text-align:center; max-width:340px; }
+  .instructions p { font-size:13.5px; color:#d1d5db; line-height:1.7; margin:4px 0; }
+  .instructions b { color:#ffd447; }
+
+  #startBtn {
+    margin-top:6px; padding:14px 42px; font-size:16px; font-weight:700; color:#0b1220;
+    background:#ffd447; border:none; border-radius:999px; box-shadow:0 8px 20px rgba(255,212,71,.35);
+  }
+  #startBtn:active { transform:scale(.97); }
+
+  /* ---------- In-scan overlay ---------- */
+  #scanUI { position:fixed; inset:0; z-index:15; pointer-events:none; display:flex; flex-direction:column; justify-content:space-between; }
+  #scanUI.hidden { display:none; }
+  #topBar { display:flex; justify-content:space-between; align-items:center; padding:16px 18px; }
+  #topBar .badge { background:rgba(17,24,39,.7); color:#ffd447; font-size:12px; padding:6px 12px; border-radius:999px; }
+  #closeBtn { pointer-events:auto; background:rgba(17,24,39,.7); color:#fff; border:none; width:34px; height:34px; border-radius:50%; font-size:16px; }
+  #hint {
+    margin:0 auto 34px; padding:10px 18px; background:rgba(17,24,39,.72); color:#fff;
+    font-size:13.5px; border-radius:999px; text-align:center; width:max-content; max-width:86vw;
+  }
+  #foundLabel {
+    position:absolute; top:14px; left:50%; transform:translateX(-50%);
+    background:rgba(255,212,71,.95); color:#0b1220; font-weight:700; font-size:13px;
+    padding:6px 16px; border-radius:999px; opacity:0; transition:opacity .3s;
+  }
+  #foundLabel.show { opacity:1; }
+</style>
+</head>
+<body>
+
+  <!-- ============ Landing screen with rotating carousel ============ -->
+  <div id="landing">
+    <div class="landing-head">
+      <h1>C03 總館視聽室・AR 電影預告</h1>
+      <p>把手機鏡頭對準海報，讓角色動起來</p>
+    </div>
+
+    <div>
+      <div class="carousel" id="carousel">
+        <div class="slide active" data-idx="0">
+          <img src="thumb_superman.jpg" alt="超人">
+          <div class="caption"><p class="title">超人 SUPERMAN</p><p class="date">9/12 播映場</p></div>
+        </div>
+        <div class="slide" data-idx="1">
+          <img src="thumb_victoria.jpg" alt="維多莉亞的遊戲">
+          <div class="caption"><p class="title">維多莉亞的遊戲</p><p class="date">9/19 播映場</p></div>
+        </div>
+      </div>
+      <div class="dots" id="dots">
+        <span class="active"></span><span></span>
+      </div>
+    </div>
+
+    <div class="instructions">
+      <p>1. 點擊下方「開始掃描」，允許使用相機</p>
+      <p>2. 將鏡頭對準視聽室門口 <b>9/12 超人</b> 或 <b>9/19 維多莉亞的遊戲</b> 海報</p>
+      <p>3. 畫面上會浮現動態預告，請保持手機穩定</p>
+      <button id="startBtn">開始掃描 ▶</button>
+    </div>
+  </div>
+
+  <!-- ============ Scan-mode overlay ============ -->
+  <div id="scanUI" class="hidden">
+    <div id="topBar">
+      <span class="badge">C03 視聽室 AR</span>
+      <button id="closeBtn">✕</button>
+    </div>
+    <div id="foundLabel">偵測到海報！</div>
+    <div id="hint">請將鏡頭對準海報，保持約 20–40 公分距離</div>
+  </div>
+
+  <!-- ============ AR Scene ============ -->
+  <a-scene mindar-image="imageTargetSrc: ./movietargets_v3.mind; autoStart: false; uiScanning: no; uiLoading: no;"
+           color-space="sRGB"
+           renderer="colorManagement: true, physicallyCorrectLights: true"
+           vr-mode-ui="enabled: false"
+           device-orientation-permission-ui="enabled: true">
+
+    <a-assets>
+      <video id="video0" src="./superman_ar_v3.mp4" preload="auto" loop muted playsinline webkit-playsinline></video>
+      <video id="video1" src="./victoria_ar_v3.mp4" preload="auto" loop muted playsinline webkit-playsinline></video>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <!-- targetIndex 0 -> 9/12 超人 (Image 1), white background keyed out -->
+    <a-entity id="target0" mindar-image-target="targetIndex: 0">
+      <a-entity chromakey-video="video: #video0; width: 1; height: 1.413" position="0 0 0" rotation="0 0 0"></a-entity>
+    </a-entity>
+
+    <!-- targetIndex 1 -> 9/19 維多莉亞的遊戲 (Image 2), white background keyed out -->
+    <a-entity id="target1" mindar-image-target="targetIndex: 1">
+      <a-entity chromakey-video="video: #video1; width: 1; height: 1.413" position="0 0 0" rotation="0 0 0"></a-entity>
+    </a-entity>
+
+  </a-scene>
+
+<script>
+  // ---------- Landing carousel auto-rotate ----------
+  const slides = document.querySelectorAll('.carousel .slide');
+  const dots = document.querySelectorAll('#dots span');
+  let cIdx = 0;
+  setInterval(() => {
+    slides[cIdx].classList.remove('active');
+    dots[cIdx].classList.remove('active');
+    cIdx = (cIdx + 1) % slides.length;
+    slides[cIdx].classList.add('active');
+    dots[cIdx].classList.add('active');
+  }, 4000);
+
+  // ---------- Start / stop AR ----------
+  const sceneEl = document.querySelector('a-scene');
+  const landing = document.getElementById('landing');
+  const scanUI = document.getElementById('scanUI');
+  const foundLabel = document.getElementById('foundLabel');
+
+  document.getElementById('startBtn').addEventListener('click', () => {
+    landing.classList.add('hidden');
+    scanUI.classList.remove('hidden');
+
+    // "Prime" both videos inside this real tap (user gesture) so mobile
+    // Safari/Chrome allow them to be played later from targetFound (which
+    // is NOT a user gesture). Without this, the plane can stay stuck on a
+    // single frame on some phones even though tracking works fine.
+    [video0, video1].forEach(v => {
+      v.play().then(() => v.pause()).catch(() => {});
+    });
+
+    if (sceneEl.hasLoaded) {
+      sceneEl.systems['mindar-image-system'].start();
+    } else {
+      sceneEl.addEventListener('loaded', () => sceneEl.systems['mindar-image-system'].start());
+    }
+  });
+
+  document.getElementById('closeBtn').addEventListener('click', () => {
+    scanUI.classList.add('hidden');
+    landing.classList.remove('hidden');
+    try { sceneEl.systems['mindar-image-system'].stop(); } catch (e) {}
+    video0.pause(); video1.pause();
+  });
+
+  // ---------- Video play/pause + label per target ----------
+  const video0 = document.getElementById('video0');
+  const video1 = document.getElementById('video1');
+  const labels = ['超人 9/12 場次已偵測', '維多莉亞的遊戲 9/19 場次已偵測'];
+
+  function bindTarget(entityId, video, labelText) {
+    const el = document.getElementById(entityId);
+    el.addEventListener('targetFound', () => {
+      video.currentTime = 0;
+      video.play();
+      foundLabel.textContent = labelText;
+      foundLabel.classList.add('show');
+    });
+    el.addEventListener('targetLost', () => {
+      video.pause();
+      foundLabel.classList.remove('show');
+    });
+  }
+  bindTarget('target0', video0, labels[0]);
+  bindTarget('target1', video1, labels[1]);
+</script>
+</body>
+</html>
