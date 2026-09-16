@@ -1,0 +1,131 @@
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>視聽室 AR 電影預告牆</title>
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+<script>
+  // Removes the plain-white background of the promo video in real time, so
+  // only the DVD case artwork + printed captions stay visible and the live
+  // camera feed shows through everywhere else.
+  AFRAME.registerComponent('chromakey-video', {
+    schema: {
+      video: { type: 'selector' },
+      width: { default: 1 },
+      height: { default: 1.413 },
+      threshold: { default: 0.90 },
+      feather: { default: 0.05 }
+    },
+    init: function () {
+      const THREE = AFRAME.THREE;
+      const texture = new THREE.VideoTexture(this.data.video);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          map: { value: texture },
+          threshold: { value: this.data.threshold },
+          feather: { value: this.data.feather }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D map;
+          uniform float threshold;
+          uniform float feather;
+          varying vec2 vUv;
+          void main() {
+            vec4 texColor = texture2D(map, vUv);
+            float minC = min(min(texColor.r, texColor.g), texColor.b);
+            float alpha = 1.0 - smoothstep(threshold - feather, threshold, minC);
+            if (alpha < 0.02) discard;
+            gl_FragColor = vec4(texColor.rgb, alpha);
+          }
+        `,
+        transparent: true,
+        side: THREE.DoubleSide
+      });
+      const geometry = new THREE.PlaneGeometry(this.data.width, this.data.height);
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.el.setObject3D('mesh', this.mesh);
+    },
+    remove: function () {
+      this.el.removeObject3D('mesh');
+    }
+  });
+</script>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif; }
+  a-scene { position:absolute; top:0; left:0; width:100%; height:100%; }
+
+  /* small, non-blocking hint - pointer-events:none so it can never sit on
+     top of / intercept any camera or permission prompt */
+  #hint {
+    position:fixed; left:50%; bottom:30px; transform:translateX(-50%);
+    padding:9px 16px; background:rgba(17,24,39,.65); color:#fff; font-size:13px;
+    border-radius:999px; pointer-events:none; z-index:5; text-align:center; max-width:86vw;
+  }
+  #foundLabel {
+    position:fixed; top:16px; left:50%; transform:translateX(-50%);
+    background:rgba(255,212,71,.95); color:#0b1220; font-weight:700; font-size:13px;
+    padding:6px 16px; border-radius:999px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:5;
+  }
+  #foundLabel.show { opacity:1; }
+</style>
+</head>
+<body>
+
+  <div id="hint">請將鏡頭對準 C03 總館視聽室門口</div>
+  <div id="foundLabel">偵測到視聽室門口！</div>
+
+  <a-scene mindar-image="imageTargetSrc: ./movietargets_v9.mind; uiScanning: no; uiLoading: no;"
+           color-space="sRGB"
+           renderer="colorManagement: true, physicallyCorrectLights: true"
+           vr-mode-ui="enabled: false"
+           device-orientation-permission-ui="enabled: false">
+
+    <a-assets>
+      <video id="carousel" src="./carousel_ar_v9.mp4" preload="auto" loop muted playsinline webkit-playsinline></video>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <!-- targetIndex 0 = 團體欣賞室門口 -->
+    <a-entity id="target0" mindar-image-target="targetIndex: 0">
+      <a-entity chromakey-video="video: #carousel; width: 1; height: 1.413" position="0 0 0.02" rotation="0 0 0"></a-entity>
+    </a-entity>
+
+  </a-scene>
+
+<script>
+  const carousel = document.getElementById('carousel');
+  const foundLabel = document.getElementById('foundLabel');
+
+  // Try to "prime" the muted video on the very first tap/touch anywhere on
+  // the page (does not block or cover anything - just listens in the
+  // background), so mobile browsers allow it to play later from
+  // targetFound (which is not itself a user gesture).
+  function primeOnce() {
+    carousel.play().then(() => carousel.pause()).catch(() => {});
+    document.removeEventListener('touchend', primeOnce);
+    document.removeEventListener('click', primeOnce);
+  }
+  document.addEventListener('touchend', primeOnce, { once: true });
+  document.addEventListener('click', primeOnce, { once: true });
+
+  const el = document.getElementById('target0');
+  el.addEventListener('targetFound', () => {
+    if (carousel.paused) { carousel.currentTime = 0; carousel.play().catch(() => {}); }
+    foundLabel.classList.add('show');
+  });
+  el.addEventListener('targetLost', () => {
+    foundLabel.classList.remove('show');
+  });
+</script>
+</body>
+</html>
